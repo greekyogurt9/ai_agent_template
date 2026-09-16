@@ -1,0 +1,60 @@
+# =============================================================================
+# docker-compose.yml — run this template WITHOUT installing Python manually.
+#
+# WHAT IS THIS FILE IN PLAIN ENGLISH?
+# Think of it as a recipe card for Docker (a tool that runs apps in an
+# isolated box called a "container"). Instead of you installing Python,
+# libraries, and tools by hand, this file says:
+#   "Take a ready-made Python box, plug in my project folder, install the
+#    2 extra libraries I need, and keep it running so I can ask questions."
+#
+# HOW TO USE IT (no experience needed):
+#   1. Install "Docker Desktop" for Windows and start it.
+#   2. Open a terminal in this folder (the one with this file).
+#   3. Start the box once:
+#        docker compose up --build -d
+#   4. Then use it:
+#        docker compose exec ai-agent make check
+#        docker compose exec ai-agent python -m agent.agent "how many active customers do we have?"
+#        docker compose exec ai-agent make eval RUN=my_first_run
+#   5. When done:
+#        docker compose down
+#
+# YOU DO NOT NEED TO EDIT THIS FILE to try the template. To point it at
+# YOUR database later, you only change the 4 lines under "environment".
+# =============================================================================
+
+services:
+  # One box (service) called "ai-agent". That's all you need for this template.
+  ai-agent:
+    # A ready-made Python 3.11 box from the internet. No Python install needed.
+    image: "python:3.11-slim"
+
+    # Inside the box, work from /app (which will be your project folder).
+    working_dir: /app
+
+    # Plug your current folder (.) into the box as /app.
+    # Means: edits you make in VS Code show up instantly inside the box.
+    volumes:
+      - ".:/app"
+
+    # Settings the template reads (same names as in agent/config.py).
+    # Change these later for YOUR warehouse. Safe defaults for first try.
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+      - WAREHOUSE_ENGINE=bigquery
+      - WAREHOUSE_PROJECT=your-project
+      - WAREHOUSE_DATASET=acme_analytics
+      - AGENT_MODEL=your-model-id
+      - MAX_RUN_USD=3.0
+      - MAX_SESSION_USD=50.0
+
+    # On first start: install the only 2 extra libraries (yaml + pptx),
+    # then stay awake so you can run commands with "docker compose exec".
+    command: >
+      bash -c "pip install --no-cache-dir pyyaml python-pptx && tail -f /dev/null"
+
+    # Keep keyboard input working for interactive questions.
+    stdin_open: true
+    tty: true
