@@ -1,0 +1,88 @@
+# ============================================================================
+# GOLDEN CASES  (Layer 4 — the objective eval)
+# ----------------------------------------------------------------------------
+# The single source of truth for "what a correct answer looks like." Each case is
+# a plain-English question + a HAND-VERIFIED reference SQL (the answer you KNOW is
+# right). The eval runs the question through the agent, executes the agent's SQL
+# and this reference SQL, and compares the RESULTS with a float-tolerant,
+# name-insensitive comparator (see lib/comparator.py) — never a string diff.
+#
+# Tiers:  core     = fast smoke set, run on every change
+#         extended = the full nightly set
+#
+# These examples use the fictional "Acme" schema. Replace with YOUR cases.
+# Start with 10-20; grow it as the eval surfaces new failure classes.
+# ============================================================================
+
+cases:
+  - id: total_active_customers
+    tier: core
+    question: "how many active customers do we have?"
+    # 'active' = revenue_last_365d > 0 on the dimension (glossary: Active customer)
+    reference_sql: |
+      SELECT COUNT(DISTINCT customer_id) AS active_customers
+      FROM `${PROJECT}.${DATASET}.dim_customer_latest`
+      WHERE is_test = FALSE AND is_fraud = FALSE
+        AND revenue_last_365d > 0
+
+  - id: active_customers_by_segment
+    tier: core
+    question: "how many active customers in each segment?"
+    reference_sql: |
+      SELECT segment,
+             COUNT(DISTINCT customer_id) AS active_customers
+      FROM `${PROJECT}.${DATASET}.dim_customer_latest`
+      WHERE is_test = FALSE AND is_fraud = FALSE
+        AND revenue_last_365d > 0
+      GROUP BY segment
+      ORDER BY segment
+
+  - id: total_revenue_2025
+    tier: core
+    question: "what was our total revenue in 2025?"
+    # plain 'revenue' = SUM(order_amount), no channel filter (glossary: Revenue; over-filtering trap)
+    reference_sql: |
+      WITH scoped AS (
+        SELECT customer_id
+        FROM `${PROJECT}.${DATASET}.dim_customer_latest`
+        WHERE is_test = FALSE AND is_fraud = FALSE
+      )
+      SELECT SUM(o.order_amount) AS total_revenue
+      FROM `${PROJECT}.${DATASET}.fct_orders_daily` o
+      JOIN scoped s USING (customer_id)
+      WHERE o.order_date BETWEEN '2025-01-01' AND '2025-12-31'
+
+  - id: revenue_by_channel_2025
+    tier: extended
+    question: "revenue by channel for 2025"
+    reference_sql: |
+      WITH scoped AS (
+        SELECT customer_id
+        FROM `${PROJECT}.${DATASET}.dim_customer_latest`
+        WHERE is_test = FALSE AND is_fraud = FALSE
+      )
+      SELECT o.channel,
+             SUM(o.order_amount) AS revenue
+      FROM `${PROJECT}.${DATASET}.fct_orders_daily` o
+      JOIN scoped s USING (customer_id)
+      WHERE o.order_date BETWEEN '2025-01-01' AND '2025-12-31'
+      GROUP BY o.channel
+      ORDER BY o.channel
+
+  - id: monthly_active_h1_2026
+    tier: extended
+    question: "monthly active customers trend for H1 2026"
+    # 'active this month' = is_active_month on the monthly table, per period (glossary)
+    reference_sql: |
+      WITH scoped AS (
+        SELECT customer_id
+        FROM `${PROJECT}.${DATASET}.dim_customer_latest`
+        WHERE is_test = FALSE AND is_fraud = FALSE
+      )
+      SELECT u.usage_month,
+             COUNT(DISTINCT IF(u.is_active_month, u.customer_id, NULL)) AS active_customers
+      FROM `${PROJECT}.${DATASET}.fct_product_usage_monthly` u
+      JOIN scoped s USING (customer_id)
+      WHERE u.usage_month BETWEEN '2026-01-01' AND '2026-06-01'
+      GROUP BY u.usage_month
+      ORDER BY u.usage_month
