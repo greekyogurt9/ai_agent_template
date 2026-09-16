@@ -1,0 +1,93 @@
+# ============================================================================
+# SEMANTIC MODEL  (Layer 1 — brain)
+# ----------------------------------------------------------------------------
+# The *structure* of your warehouse the agent is allowed to touch: which tables
+# exist, what one row means, how they join, and when to pick each one.
+#
+# STRUCTURE ONLY. Do NOT list columns, types, or category values here — those
+# are fetched LIVE at query time via tools/show_schema.sh and show_values.sh,
+# so they can never go stale or be hallucinated.
+#
+# This example describes a fictional company "Acme". Replace it with YOUR tables.
+# Keep the set as SMALL as possible — fewer tables = less routing ambiguity.
+# ============================================================================
+
+warehouse:
+  # Filled in by config.py at runtime; shown here for readers.
+  engine: bigquery            # bigquery | snowflake | postgres
+  project: your-project       # <-- your billing/compute project
+  dataset: acme_analytics     # <-- the dataset/schema holding the tables below
+
+entity:
+  # The thing you count by default, and its canonical key.
+  name: customer
+  key: customer_id            # canonical identifier — count DISTINCT on this
+  note: >
+    Count on customer_id by default. Some early-funnel rows may have a NULL
+    customer_id (pre-activation); use signup_id for funnel/pre-activation counts
+    and say so explicitly. (This mirrors a real gotcha: the join key is NULL for
+    a slice of the population, so the count key and the join key can differ.)
+
+tables:
+
+  dim_customer_latest:
+    grain: one row per customer (current state)
+    primary_key: customer_id
+    join_key: customer_id
+    routing: >
+      Pick this for anything about WHO the customer is — country, segment, plan,
+      signup/activation dates, fraud flag — and for precomputed per-customer
+      lifetime metrics. It is also the scope/identity bridge every fact joins to.
+    provides:
+      - customer attributes (country, segment, plan, industry bucket)
+      - lifecycle timestamps (signup, activation)
+      - the mandatory scope flags (see glossary: Mandatory scope)
+      - precomputed convenience metrics (e.g. lifetime_revenue, revenue_last_365d)
+    caveats:
+      - primary_key is customer_id and is unique + non-null on this table
+      - join_key customer_id is NULL for ~early-funnel rows; use signup_id there
+
+  fct_orders_daily:
+    grain: one row per customer per day per channel
+    join_key: customer_id
+    routing: >
+      Pick this for revenue / order volume / anything transactional over time.
+      Multi-row per customer per day — always aggregate; never assume one row.
+    joins:
+      - to: dim_customer_latest
+        on: customer_id
+        mandatory: true
+        why: >
+          Inherits scope + identity (test/fraud exclusion, segment). Summing this
+          table WITHOUT the dim bridge counts excluded/out-of-scope customers.
+    caveats:
+      - fan-out safe counting requires COUNT(DISTINCT customer_id), not COUNT(*)
+      - channel is a categorical col — call show_values before filtering it
+
+  fct_product_usage_monthly:
+    grain: one row per customer per calendar month
+    join_key: customer_id
+    routing: >
+      Pick this for engagement / feature-adoption questions at monthly grain
+      (e.g. monthly active, feature usage flags). No daily/weekly grain here.
+    joins:
+      - to: dim_customer_latest
+        on: customer_id
+        mandatory: true
+        why: scope + identity bridge (same reason as fct_orders_daily)
+    caveats:
+      - "'active this month' is defined on THIS table's monthly flag — see glossary"
+      - flags are current-per-month; filtering one in WHERE under a dimension
+        GROUP BY drops zero-buckets (see sql_style: per-group subset count)
+
+# ----------------------------------------------------------------------------
+# JOIN GRAPH (quick reference)
+#
+#   dim_customer_latest (customer_id, PK)
+#        ▲                     ▲
+#        │ customer_id         │ customer_id   (both MANDATORY bridges)
+#        │                     │
+#   fct_orders_daily     fct_product_usage_monthly
+#
+# No fact-to-fact joins. Everything routes through the dimension.
+# ----------------------------------------------------------------------------
