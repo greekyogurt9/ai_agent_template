@@ -14,7 +14,7 @@ placeholder for a fictional company ("Acme"). It is a *scaffold + playbook*: cop
 warehouse, and fill in your own brain.
 
 > **Read `ARCHITECTURE.md` for the design, `GETTING_STARTED.md` for the step-by-step adaptation guide,
-> and `SWAP_DATASETS.md` to swap in your own datasets + glossary without breaking the gates (includes time estimates).**
+> and `ADAPT_TO_YOUR_DATA.md` to point it at your own datasets + glossary without breaking the gates (includes time estimates).**
 
 ---
 

@@ -1,4 +1,4 @@
-# SWAP_DATASETS.md — make this template yours without breaking it
+# Adapt to your data — make this template yours without breaking it
 
 > **Goal:** point this agent at YOUR tables, write YOUR glossary, and get
 > trustworthy answers — without the linter, the prompt, or the eval fighting you.
