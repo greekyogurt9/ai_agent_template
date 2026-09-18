@@ -57,7 +57,7 @@ def run_route(router=_route_offline) -> ComponentResult:
         got = router(q)
         ok = got == expected
         passed += ok
-        print(f"  [{'ok' if ok else 'XX'}] route: {q!r:50} → {got}  (want {expected})")
+        print(f"  [{'ok' if ok else 'XX'}] route: {q!r:50} -> {got}  (want {expected})")
     return ComponentResult("route", passed, len(ROUTE_CASES))
 
 

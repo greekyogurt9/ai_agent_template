@@ -28,6 +28,28 @@ entity:
     and say so explicitly. (This mirrors a real gotcha: the join key is NULL for
     a slice of the population, so the count key and the join key can differ.)
 
+# ----------------------------------------------------------------------------
+# PORTABILITY POLICY (machine-readable — drives tools/lint_sql.py).
+# ----------------------------------------------------------------------------
+# WHY THIS EXISTS: the linter enforces your scope/counting/naming rules as code.
+# When you swap datasets you MUST update this block to your tables/columns —
+# otherwise the linter keeps enforcing the old Acme rules and blocks every query
+# with false ERRORs. Edit HERE once; the linter follows automatically.
+# (If this block is missing, lint_sql.py falls back to the Acme defaults below.)
+policy:
+  dim_table: dim_customer_latest     # the scope/identity bridge table
+  fact_tables:                       # tables that MUST join the dim (mandatory bridge)
+    - fct_orders_daily
+    - fct_product_usage_monthly
+  entity_key: customer_id            # COUNT(DISTINCT <entity_key>); must match entity.key above
+  scope_columns:                     # must appear as = FALSE filters when dim is touched
+    - is_test
+    - is_fraud
+  subset_flags:                      # filtered in WHERE under a dimension GROUP BY drops zero-buckets
+    - is_active_month
+  money_columns:                     # SUM(...) on these must be aliased *_revenue (sql_style §D)
+    - order_amount
+
 tables:
 
   dim_customer_latest:

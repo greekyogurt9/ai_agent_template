@@ -13,7 +13,8 @@ This repo contains **no real business data or rules** — every table, column, a
 placeholder for a fictional company ("Acme"). It is a *scaffold + playbook*: copy it, point it at your
 warehouse, and fill in your own brain.
 
-> **Read `ARCHITECTURE.md` for the design and `GETTING_STARTED.md` for the step-by-step adaptation guide.**
+> **Read `ARCHITECTURE.md` for the design, `GETTING_STARTED.md` for the step-by-step adaptation guide,
+> and `SWAP_DATASETS.md` to swap in your own datasets + glossary without breaking the gates (includes time estimates).**
 
 ---
 

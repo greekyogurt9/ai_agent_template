@@ -48,11 +48,33 @@ class ReviewResult:
 
 def _dry_run(sql: str) -> tuple[bool, str, int | None]:
     """Validate the SQL WITHOUT executing it. Returns (ok, message, estimated_bytes).
-    EDIT for your warehouse. BigQuery example shown; Snowflake→EXPLAIN, Postgres→EXPLAIN."""
+    Engine-aware: dispatches on agent/config.py WAREHOUSE_ENGINE.
+      BigQuery  → `bq query --dry_run`
+      Snowflake → `snowsql -q "EXPLAIN <sql>"`
+      Postgres  → `psql $PGCONN -c "EXPLAIN <sql>"`
+    Returns (True, skipped-note, None) when the warehouse CLI is not installed
+    (template mode) so `make check` stays green before you wire a warehouse."""
     try:
-        proc = subprocess.run(
-            ["bq", "query", "--use_legacy_sql=false", "--dry_run", "--format=none", sql],
-            capture_output=True, text=True, timeout=60)
+        from agent import config as _cfg
+        engine = str(getattr(_cfg, "WAREHOUSE_ENGINE", "bigquery")).lower()
+    except Exception:
+        engine = "bigquery"
+    try:
+        if engine == "snowflake":
+            proc = subprocess.run(
+                ["snowsql", "-o", "friendly=false", "-o", "header=false",
+                 "-o", "output_format=csv", "-q", f"EXPLAIN {sql}"],
+                capture_output=True, text=True, timeout=60)
+        elif engine == "postgres":
+            import os as _os
+            pgconn = _os.environ.get("PGCONN", "")
+            proc = subprocess.run(
+                ["psql", pgconn, "-F,", "--no-align", "-c", f"EXPLAIN {sql}"],
+                capture_output=True, text=True, timeout=60)
+        else:  # bigquery (default)
+            proc = subprocess.run(
+                ["bq", "query", "--use_legacy_sql=false", "--dry_run", "--format=none", sql],
+                capture_output=True, text=True, timeout=60)
         if proc.returncode != 0:
             return False, proc.stderr.strip()[:400], None
         # bq prints the byte estimate to stderr; parse if you want a cost gate here

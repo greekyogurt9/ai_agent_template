@@ -53,11 +53,26 @@ def cmd_component(name: str = "route") -> int:
 # --- expensive full run -----------------------------------------------------
 def _execute(sql: str) -> list:
     """Run SQL and return rows (list of lists), header stripped. EDIT for your warehouse.
-    Returns [] and prints a note in template mode (no warehouse CLI)."""
+    Engine-aware: dispatches on agent/config.py WAREHOUSE_ENGINE (bigquery |
+    snowflake | postgres). Returns [] and prints a note in template mode (no
+    warehouse CLI)."""
     sql = sql.replace("${PROJECT}", config.WAREHOUSE_PROJECT).replace("${DATASET}", config.WAREHOUSE_DATASET)
+    engine = str(getattr(config, "WAREHOUSE_ENGINE", "bigquery")).lower()
     try:
-        r = subprocess.run(["bq", "query", "--use_legacy_sql=false", "--format=csv", "--quiet", sql],
-                           capture_output=True, text=True, timeout=300)
+        if engine == "snowflake":
+            r = subprocess.run(
+                ["snowsql", "-o", "friendly=false", "-o", "header=true",
+                 "-o", "output_format=csv", "-q", sql],
+                capture_output=True, text=True, timeout=300)
+        elif engine == "postgres":
+            import os as _os
+            pgconn = _os.environ.get("PGCONN", "")
+            r = subprocess.run(
+                ["psql", pgconn, "-F,", "--no-align", "-c", sql],
+                capture_output=True, text=True, timeout=300)
+        else:  # bigquery (default)
+            r = subprocess.run(["bq", "query", "--use_legacy_sql=false", "--format=csv", "--quiet", sql],
+                               capture_output=True, text=True, timeout=300)
     except FileNotFoundError:
         print("  [template mode] warehouse CLI not found — cannot execute", file=sys.stderr)
         return []

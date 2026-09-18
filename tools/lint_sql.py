@@ -25,18 +25,95 @@ from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
-# Schema signatures — EDIT THESE to your tables/columns (from semantic_model.yaml)
+# Schema signatures — EDIT THESE by editing brain/semantic_model.yaml `policy:`
+# (NOT here). The loader below reads the policy block automatically, so a
+# dataset swap = one YAML edit, and the linter follows. The constants below are
+# FALLBACK defaults (the Acme example) used only when the policy block or the
+# YAML library is unavailable — keep them in sync with semantic_model.yaml.
 # ---------------------------------------------------------------------------
-DIM = "dim_customer_latest"
-FACT_TABLES = ("fct_orders_daily", "fct_product_usage_monthly")
-ENTITY_KEY = "customer_id"
+_DEFAULT_DIM = "dim_customer_latest"
+_DEFAULT_FACTS = ("fct_orders_daily", "fct_product_usage_monthly")
+_DEFAULT_ENTITY_KEY = "customer_id"
+_DEFAULT_SCOPE_COLUMNS = ("is_test", "is_fraud")
+_DEFAULT_SUBSET_FLAGS = ("is_active_month",)
+_DEFAULT_MONEY_COLUMNS = ("order_amount",)
+
+
+def _load_policy():
+    """Read the `policy:` block from brain/semantic_model.yaml. Returns a dict
+    of overrides (possibly empty). Never raises — falls back to defaults."""
+    try:
+        from pathlib import Path as _Path
+        candidates = [
+            _Path(__file__).resolve().parent.parent / "brain" / "semantic_model.yaml",
+            _Path.cwd() / "brain" / "semantic_model.yaml",
+        ]
+        model_path = next((p for p in candidates if p.exists()), None)
+        if model_path is None:
+            return {}
+        text = model_path.read_text()
+        try:
+            import yaml  # type: ignore
+            data = yaml.safe_load(text) or {}
+        except ImportError:
+            # Minimal fallback: parse the small `policy:` block without PyYAML.
+            import re as _re
+            m = _re.search(r"^policy:\s*\n((?:[ ]+.+\n?)+)", text, _re.MULTILINE)
+            if not m:
+                return {}
+            data = {"policy": {}}
+            cur_key, vals = None, []
+            for line in m.group(1).splitlines():
+                kv = _re.match(r"\s{2}(\w+):\s*(.*)", line)
+                item = _re.match(r"\s*-\s*(.+)", line)
+                if kv:
+                    if cur_key:
+                        data["policy"][cur_key] = vals if vals else {}
+                    cur_key, vals = kv.group(1), []
+                    rest = kv.group(2).strip()
+                    if rest:
+                        data["policy"][cur_key] = rest
+                elif item and cur_key:
+                    vals.append(item.group(1).strip())
+            if cur_key and vals:
+                data["policy"][cur_key] = vals
+        policy = (data or {}).get("policy") or {}
+        if not isinstance(policy, dict):
+            return {}
+        return policy
+    except Exception:
+        return {}
+
+
+_POLICY = _load_policy()
+
+
+def _policy_list(key, default):
+    vals = _POLICY.get(key, default)
+    if isinstance(vals, str):
+        return (vals,)
+    try:
+        return tuple(v for v in vals if v)
+    except TypeError:
+        return default
+
+
+DIM = str(_POLICY.get("dim_table", _DEFAULT_DIM))
+FACT_TABLES = _policy_list("fact_tables", _DEFAULT_FACTS)
+ENTITY_KEY = str(_POLICY.get("entity_key", _DEFAULT_ENTITY_KEY))
+SCOPE_COLUMNS = _policy_list("scope_columns", _DEFAULT_SCOPE_COLUMNS)
 
 # current-per-period subset flags that, filtered in a WHERE under a dimension GROUP BY, drop zero-buckets
-SUBSET_FLAGS = ("is_active_month",)
+SUBSET_FLAGS = _policy_list("subset_flags", _DEFAULT_SUBSET_FLAGS)
 
-# the mandatory scope columns that must appear on any query touching the dimension (glossary: Mandatory scope)
-SCOPE_TEST = "is_test"
-SCOPE_FRAUD = "is_fraud"
+# money measure columns whose SUM(...) must be aliased *_revenue (sql_style §D)
+MONEY_COLUMNS = _policy_list("money_columns", _DEFAULT_MONEY_COLUMNS)
+
+# Backward-compatible aliases: the mandatory scope columns that must appear on
+# any query touching the dimension (glossary: Mandatory scope). Prefer
+# SCOPE_COLUMNS for new code; these cover the common two-column case.
+SCOPE_TEST = SCOPE_COLUMNS[0] if len(SCOPE_COLUMNS) > 0 else _DEFAULT_SCOPE_COLUMNS[0]
+SCOPE_FRAUD = SCOPE_COLUMNS[1] if len(SCOPE_COLUMNS) > 1 else _DEFAULT_SCOPE_COLUMNS[1]
 
 
 # ---------------------------------------------------------------------------
@@ -192,11 +269,12 @@ def check_output_naming(sql: str):
                     or "_per_" in a)
         if is_ratio:
             continue
-        entity_count = bool(re.search(rf"count\s*\(\s*distinct[^)]*{ENTITY_KEY}", low)) or "countif(" in low
+        entity_count = bool(re.search(rf"count\s*\(\s*distinct[^)]*{re.escape(ENTITY_KEY)}", low)) or "countif(" in low
         if entity_count and not ("customers" in a or a.startswith("num_")):
             out.append(Finding("WARN", "name_count_suffix",
                                f"customer count aliased `{alias}` — use a *_customers (or num_*) name.", RULE))
-        sums_money = re.search(r"sum\s*\(\s*[^)]*order_amount", low) is not None
+        sums_money = any(re.search(rf"sum\s*\(\s*[^)]*{re.escape(m)}", low) is not None
+                         for m in MONEY_COLUMNS)
         if sums_money and not a.endswith("_revenue"):
             out.append(Finding("WARN", "name_money_suffix",
                                f"revenue sum aliased `{alias}` — use a *_revenue name.", RULE))
@@ -225,14 +303,19 @@ def lint_sql(sql: str, out_columns=None):
 
     # 2) dimension must carry the mandatory scope filters.  [glossary: Mandatory scope]
     if touches_dim:
-        if SCOPE_TEST not in low:
-            f.append(Finding("ERROR", "missing_test_scope",
-                             f"query touches {DIM} without a {SCOPE_TEST} = FALSE filter.",
-                             "glossary: Mandatory scope"))
-        if SCOPE_FRAUD not in low:
-            f.append(Finding("ERROR", "missing_fraud_scope",
-                             f"query touches {DIM} without a {SCOPE_FRAUD} = FALSE filter.",
-                             "glossary: Mandatory scope"))
+        for i, col in enumerate(SCOPE_COLUMNS):
+            if col.lower() not in low:
+                # Keep the historic codes for the default two-column policy so
+                # existing goldens/selftests keep passing; extras get a generic code.
+                if col == "is_test":
+                    code = "missing_test_scope"
+                elif col == "is_fraud":
+                    code = "missing_fraud_scope"
+                else:
+                    code = f"missing_{col}_scope"
+                f.append(Finding("ERROR", code,
+                                 f"query touches {DIM} without a {col} = FALSE filter.",
+                                 "glossary: Mandatory scope"))
 
     # 3) counting hygiene.  [sql_style §B]
     if re.search(r"count\s*\(\s*\*\s*\)", low):
